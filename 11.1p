@@ -1,0 +1,86 @@
+#include <Wire.h>
+#include <BH1750.h>
+#include <DHT.h>
+
+#define DHTPIN 2
+#define DHTTYPE DHT22
+#define PIRPIN 3
+#define FANPIN 4
+#define LIGHT_THRESHOLD 100        // Light level threshold to turn on the fan
+#define TEMP_THRESHOLD 10         // Temperature threshold to turn on the fan
+#define HUM_THRESHOLD 60          // Humidity threshold to turn on the fan
+#define MOTION_DETECT_DURATION 3000 // Minimum motion detect duration in milliseconds
+#define FAN_ON_DURATION 60000     // Duration to keep the fan on after motion is detected, in milliseconds
+#define CHECK_INTERVAL 10000      // Interval to check for continued motion, in milliseconds
+
+BH1750 lightMeter;
+DHT dht(DHTPIN, DHTTYPE);
+unsigned long motionStartTime = 0;
+unsigned long fanOnTime = 0;
+bool motionConfirmed = false;
+bool fanOn = false;
+
+void setup() {
+  Serial.begin(9600);
+  Wire.begin();
+  lightMeter.begin();
+  dht.begin();
+  pinMode(PIRPIN, INPUT);
+  pinMode(FANPIN, OUTPUT);
+  Serial.println("Smart Fan with Motion Detection");
+}
+
+void loop() {
+  float lightLevel = lightMeter.readLightLevel();
+  float temperature = dht.readTemperature();
+  float humidity = dht.readHumidity();
+  int motion = digitalRead(PIRPIN);
+
+  // Check if motion is detected continuously for the required duration
+  if (motion == HIGH) {
+    if (!motionConfirmed) {
+      motionStartTime = millis();
+      motionConfirmed = true;
+    } else if (millis() - motionStartTime > MOTION_DETECT_DURATION) {
+      Serial.println("Significant motion detected");
+      motionStartTime = millis(); // reset to allow for continuous checking
+
+      // Turn on the fan if environmental conditions are met
+      if (lightLevel < LIGHT_THRESHOLD && temperature > TEMP_THRESHOLD && humidity > HUM_THRESHOLD) {
+        fanOn = true;
+        fanOnTime = millis();
+        digitalWrite(FANPIN, HIGH);
+        Serial.println("Fan: On");
+      }
+    }
+  } else {
+    motionConfirmed = false;
+  }
+
+  // Check if the fan should remain on
+  if (fanOn && millis() - fanOnTime >= FAN_ON_DURATION) {
+    if (millis() - motionStartTime > CHECK_INTERVAL) {
+      Serial.println("No significant motion detected, turning off fan");
+      fanOn = false;
+      digitalWrite(FANPIN, LOW);
+    } else {
+      Serial.println("Checking for continued motion");
+      fanOnTime = millis(); // keep the fan on as long as motion is detected within the interval
+    }
+  }
+
+  Serial.print("Light: ");
+  Serial.print(lightLevel);
+  Serial.println(" lx");
+
+  Serial.print("Temperature: ");
+  Serial.print(temperature);
+  Serial.println(" *C");
+
+  Serial.print("Humidity: ");
+  Serial.print(humidity);
+  Serial.println(" %");
+
+  Serial.println("-----------------------------");
+  delay(2000);
+}

@@ -1,17 +1,29 @@
 #include <Wire.h>
 #include <BH1750.h>
 #include <DHT.h>
+#include <WiFiNINA.h>
+#include <ArduinoHttpClient.h>
 
 #define DHTPIN 2
 #define DHTTYPE DHT22
 #define PIRPIN 3
 #define FANPIN 4
-#define LIGHT_THRESHOLD 100        // Light level threshold to turn on the fan
-#define TEMP_THRESHOLD 10         // Temperature threshold to turn on the fan
-#define HUM_THRESHOLD 60          // Humidity threshold to turn on the fan
+#define LIGHT_THRESHOLD 200        // Light level threshold to turn on the fan
+#define TEMP_THRESHOLD 10          // Temperature threshold to turn on the fan
+#define HUM_THRESHOLD 40           // Humidity threshold to turn on the fan
 #define MOTION_DETECT_DURATION 3000 // Minimum motion detect duration in milliseconds
-#define FAN_ON_DURATION 60000     // Duration to keep the fan on after motion is detected, in milliseconds
-#define CHECK_INTERVAL 10000      // Interval to check for continued motion, in milliseconds
+#define FAN_ON_DURATION 60000      // Duration to keep the fan on after motion is detected, in milliseconds
+#define CHECK_INTERVAL 10000       // Interval to check for continued motion, in milliseconds
+
+// WiFi credentials
+const char* ssid = "DODO-8BEF";
+const char* password = "FLCCVDF5MB";
+
+// IFTTT webhook settings
+const char* ifttt_server = "maker.ifttt.com";
+const char* ifttt_event_fan_on = "fan_turned_on";
+const char* ifttt_event_fan_off = "fan_turned_off";
+const char* ifttt_key = "lMw082GKSMRbHpCgBfnjeakrl8PNbaNymLW2jUER2YK";
 
 BH1750 lightMeter;
 DHT dht(DHTPIN, DHTTYPE);
@@ -19,6 +31,9 @@ unsigned long motionStartTime = 0;
 unsigned long fanOnTime = 0;
 bool motionConfirmed = false;
 bool fanOn = false;
+
+WiFiClient wifi;
+HttpClient client = HttpClient(wifi, ifttt_server, 80);
 
 void setup() {
   Serial.begin(9600);
@@ -28,6 +43,16 @@ void setup() {
   pinMode(PIRPIN, INPUT);
   pinMode(FANPIN, OUTPUT);
   Serial.println("Smart Fan with Motion Detection");
+
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.println("Connected to Wi-Fi");
 }
 
 void loop() {
@@ -47,10 +72,13 @@ void loop() {
 
       // Turn on the fan if environmental conditions are met
       if (lightLevel < LIGHT_THRESHOLD && temperature > TEMP_THRESHOLD && humidity > HUM_THRESHOLD) {
-        fanOn = true;
-        fanOnTime = millis();
-        digitalWrite(FANPIN, HIGH);
-        Serial.println("Fan: On");
+        if (!fanOn) {
+          fanOn = true;
+          fanOnTime = millis();
+          digitalWrite(FANPIN, HIGH);
+          Serial.println("Fan: On");
+          sendIFTTTNotification(ifttt_event_fan_on, temperature, humidity, lightLevel);
+        }
       }
     }
   } else {
@@ -63,6 +91,7 @@ void loop() {
       Serial.println("No significant motion detected, turning off fan");
       fanOn = false;
       digitalWrite(FANPIN, LOW);
+      sendIFTTTNotification(ifttt_event_fan_off, temperature, humidity, lightLevel);
     } else {
       Serial.println("Checking for continued motion");
       fanOnTime = millis(); // keep the fan on as long as motion is detected within the interval
@@ -82,5 +111,41 @@ void loop() {
   Serial.println(" %");
 
   Serial.println("-----------------------------");
+
   delay(2000);
+}
+
+void sendIFTTTNotification(const char* event, float temp, float hum, float light) {
+  Serial.print("Sending notification to IFTTT for event: ");
+  Serial.println(event);
+
+  // Construct the URL with the event name and key
+  String url = "/trigger/" + String(event) + "/with/key/" + String(ifttt_key);
+
+  // Create the message body with temperature, humidity, and light values
+  String messageBody = "{\"value1\":\"" + String(temp) + "\", \"value2\":\"" + String(hum) + "\", \"value3\":\"" + String(light) + "\"}";
+
+  // Send the POST request with the message body
+  client.beginRequest();
+  client.post(url);
+  client.sendHeader("Content-Type", "application/json");
+  client.sendHeader("Content-Length", messageBody.length());
+  client.beginBody();
+  client.print(messageBody);
+  client.endRequest();
+
+  int statusCode = client.responseStatusCode();
+  String response = client.responseBody();
+
+  if (statusCode < 0) {
+    Serial.print("Failed to send request, error code: ");
+    Serial.println(statusCode);
+  } else {
+    Serial.print("Notification sent, status code: ");
+    Serial.println(statusCode);
+    Serial.print("Response: ");
+    Serial.println(response);
+  }
+
+  client.stop();
 }
